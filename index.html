@@ -469,9 +469,9 @@
             if (!navigator.geolocation) return window.app.showToast("Meteo non supportato dal browser", "error");
             
             // UI di caricamento
-            document.getElementById('dashboard-weather').classList.remove('hidden');
-            document.getElementById('weather-title').innerText = "Controllo il cielo...";
-            document.getElementById('weather-desc').innerText = "Attendi un istante...";
+            const weatherBlock = document.getElementById('dashboard-weather');
+            weatherBlock.classList.remove('hidden');
+            weatherBlock.innerHTML = `<div class="text-center py-4"><i class="fa-solid fa-spinner fa-spin text-4xl text-blue-500 mb-3"></i><h3 class="font-serif font-bold text-lg">Controllo il cielo...</h3></div>`;
             
             navigator.geolocation.getCurrentPosition(async (pos) => {
                 try {
@@ -496,12 +496,12 @@
             const isSnow = [71,73,75,77,85,86].includes(code);
             
             let icon = 'fa-sun', desc = 'Giornata mite, perfetto per abbigliamento comodo.';
-            let tops = ['T-Shirt', 'Camicia'], bottoms = ['Pantaloni', 'Jeans'], jackets = [];
+            let tops = ['T-Shirt', 'Camicia', 'Camicetta'], bottoms = ['Pantaloni', 'Jeans', 'Gonna'], jackets = [];
 
             if (isRaining || isSnow) {
                 icon = isSnow ? 'fa-snowflake text-blue-300' : 'fa-cloud-rain text-blue-500';
-                desc = isSnow ? `Nevica! Fa freddo (${temp}°C), copriti benissimo.` : `Oggi piove (${temp}°C). Ti consiglio assolutamente una giacca, magari scura, e scarpe chiuse per non rovinare i vestiti.`;
-                tops = ['Maglione', 'Felpa', 'Camicia'];
+                desc = isSnow ? `Nevica! Fa freddo (${temp}°C), copriti benissimo.` : `Oggi piove (${temp}°C). Ti consiglio assolutamente una giacca e scarpe chiuse.`;
+                tops = ['Maglione', 'Felpa', 'Camicia', 'Camicetta'];
                 jackets = ['Giacca', 'Cappotto'];
                 bottoms = ['Pantaloni', 'Jeans'];
             } else if (temp < 15) {
@@ -509,6 +509,7 @@
                 desc = `Fa piuttosto freddo oggi (${temp}°C). Meglio mettersi un maglione per stare al caldo!`;
                 tops = ['Maglione', 'Felpa'];
                 jackets = ['Giacca', 'Cappotto'];
+                bottoms = ['Pantaloni', 'Jeans'];
             } else if (temp > 24) {
                 icon = 'fa-temperature-arrow-up text-orange-500';
                 desc = `Fa caldo oggi! Ci sono ${temp}°C, opta per tessuti leggeri e chiari.`;
@@ -546,29 +547,33 @@
             if (state.weatherData) {
                 weatherBlock.classList.remove('hidden');
                 const outfit = getOutfitForWeather(state.weatherData);
-                document.getElementById('weather-title').innerText = "Consiglio del Giorno";
-                document.getElementById('weather-icon').className = `fa-solid ${outfit.icon} mr-3 text-2xl`;
-                document.getElementById('weather-temp').innerText = outfit.temp;
-                document.getElementById('weather-desc').innerText = outfit.desc;
-                
-                const list = document.getElementById('weather-outfit-list');
-                if (outfit.items.length === 0) {
-                    list.innerHTML = `<p class="text-sm text-red-500">Non hai capi puliti adatti a questo meteo! Devi fare una lavatrice.</p>`;
-                } else {
-                    list.innerHTML = outfit.items.map(item => `
-                        <div class="bg-gray-50 p-3 rounded-xl border border-gray-100 flex flex-col justify-between">
-                            <div class="flex items-center space-x-3 mb-3">
-                                <div class="w-10 h-10 bg-gray-200 rounded-lg overflow-hidden shrink-0">
-                                    ${item.imageUrl ? `<img src="${item.imageUrl}" class="w-full h-full object-cover">` : `<i class="fa-solid fa-shirt text-gray-400 p-2 text-center w-full"></i>`}
+                weatherBlock.innerHTML = `
+                    <div class="flex justify-between items-center mb-4 border-b border-gray-100 pb-4">
+                        <h3 class="text-xl font-serif font-bold flex items-center">
+                            <i class="fa-solid ${outfit.icon} mr-3 text-2xl"></i>
+                            <span>Consiglio del Giorno</span>
+                        </h3>
+                        <span class="text-2xl font-bold text-gray-700">${outfit.temp}</span>
+                    </div>
+                    <p class="text-gray-600 mb-6 italic text-sm md:text-base">${outfit.desc}</p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        ${outfit.items.length === 0 
+                            ? `<p class="text-sm text-red-500 bg-red-50 p-4 rounded-xl border border-red-100">Non hai capi puliti adatti a questo meteo (oppure l'armadio è vuoto). Aggiungi vestiti al guardaroba o fai una lavatrice!</p>`
+                            : outfit.items.map(item => `
+                                <div class="bg-gray-50 p-3 rounded-xl border border-gray-100 flex flex-col justify-between">
+                                    <div class="flex items-center space-x-3 mb-3">
+                                        <div class="w-10 h-10 bg-gray-200 rounded-lg overflow-hidden shrink-0">
+                                            ${item.imageUrl ? `<img src="${item.imageUrl}" class="w-full h-full object-cover">` : `<i class="fa-solid fa-shirt text-gray-400 p-2 text-center w-full"></i>`}
+                                        </div>
+                                        <span class="text-sm font-medium leading-tight">${item.name}</span>
+                                    </div>
+                                    <button onclick="window.app.updateStatus('${item.id}', '${STATUS.WEARING}')" class="w-full py-2 bg-dark text-white text-xs font-bold rounded-lg hover:bg-black transition-colors">
+                                        Indossa Subito
+                                    </button>
                                 </div>
-                                <span class="text-sm font-medium leading-tight">${item.name}</span>
-                            </div>
-                            <button onclick="window.app.updateStatus('${item.id}', '${STATUS.WEARING}')" class="w-full py-2 bg-dark text-white text-xs font-bold rounded-lg hover:bg-black transition-colors">
-                                Indossa Subito
-                            </button>
-                        </div>
-                    `).join('');
-                }
+                            `).join('')}
+                    </div>
+                `;
             } else {
                 weatherBlock.classList.remove('hidden');
                 weatherBlock.innerHTML = `
