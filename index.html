@@ -1,1 +1,967 @@
-:
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Menu, X, Home, Shirt, WashingMachine, Briefcase, ShoppingBag, 
+  Plus, Search, Filter, Camera, LogOut, CheckCircle2, AlertCircle, 
+  Trash2, User, ChevronRight, Droplets, Info
+} from 'lucide-react';
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot, updateDoc, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+// Firebase Initialization
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'wardrobe-app-default';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+let app, db, auth;
+
+try {
+  app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  auth = getAuth(app);
+} catch (e) {
+  console.error("Firebase init error:", e);
+}
+
+const GENDERS = { M: 'Uomo', F: 'Donna', U: 'Unisex' };
+const STATUS = { CLEAN: 'pulito', WEARING: 'indossato', DIRTY: 'sporco' };
+const COLORS = [
+  { name: 'Nero', hex: '#000000', type: 'dark' }, { name: 'Bianco', hex: '#ffffff', type: 'light' },
+  { name: 'Grigio', hex: '#808080', type: 'mix' }, { name: 'Blu Navy', hex: '#000080', type: 'dark' },
+  { name: 'Beige', hex: '#f5f5dc', type: 'light' }, { name: 'Rosso', hex: '#ff0000', type: 'color' },
+  { name: 'Verde', hex: '#008000', type: 'color' }, { name: 'Giallo', hex: '#ffff00', type: 'color' },
+  { name: 'Rosa', hex: '#ffc0cb', type: 'light' }, { name: 'Azzurro', hex: '#87ceeb', type: 'light' },
+  { name: 'Marrone', hex: '#8b4513', type: 'dark' }, { name: 'Multicolore', hex: 'linear-gradient(to right, red, yellow)', type: 'mix' }
+];
+
+const CATEGORIES = {
+  M: ['T-Shirt', 'Camicia', 'Maglione', 'Felpa', 'Jeans', 'Pantaloni', 'Pantaloncini', 'Completo', 'Giacca', 'Cappotto', 'Scarpe Sportive', 'Scarpe Eleganti', 'Intimo', 'Calzini', 'Accessori'],
+  F: ['T-Shirt', 'Camicetta', 'Maglione', 'Gonna', 'Vestito', 'Jeans', 'Pantaloni', 'Pantaloncini', 'Giacca', 'Cappotto', 'Scarpe Sportive', 'Tacchi', 'Stivali', 'Borsa', 'Intimo', 'Calzini', 'Accessori']
+};
+
+const SEASONS = ['Tutte', 'Inverno', 'Primavera', 'Estate', 'Autunno'];
+
+const compressImage = (file, maxWidth = 500, quality = 0.6) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth) {
+          height = Math.round((height *= maxWidth / width));
+          width = maxWidth;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
+
+const daysBetween = (date1, date2) => {
+  if (!date1) return 0;
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+  const diffTime = Math.abs(d2 - d1);
+  return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+};
+
+const generateId = () => Math.random().toString(36).substring(2, 9);
+
+export default function ArmadioApp() {
+  // Global State
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profiles, setProfiles] = useState([]);
+  const [currentProfile, setCurrentProfile] = useState(null);
+  const [items, setItems] = useState([]);
+  
+  // UI State
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Authentication Effect
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch Profiles Effect
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const q = query(collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'profiles'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const profs = [];
+      snapshot.forEach(doc => profs.push({ id: doc.id, ...doc.data() }));
+      setProfiles(profs);
+      setIsLoading(false);
+    }, (error) => console.error("Profiles sync error", error));
+    return () => unsubscribe();
+  }, [firebaseUser]);
+
+  // Fetch Items Effect
+  useEffect(() => {
+    if (!firebaseUser || !currentProfile) return;
+    const q = query(
+      collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'items'),
+      where("profileId", "==", currentProfile.id)
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const its = [];
+      snapshot.forEach(doc => its.push({ id: doc.id, ...doc.data() }));
+      setItems(its);
+    }, (error) => console.error("Items sync error", error));
+    return () => unsubscribe();
+  }, [firebaseUser, currentProfile]);
+
+  const showToast = (msg, type = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleCreateProfile = async (name, gender, pin) => {
+    const newProfile = { id: generateId(), name, gender, pin };
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, 'profiles', newProfile.id), newProfile);
+      showToast('Profilo creato con successo!');
+      setCurrentProfile(newProfile);
+    } catch (e) {
+      showToast('Errore durante la creazione', 'error');
+    }
+  };
+
+  const handleLogin = (profile, pin) => {
+    if (profile.pin === pin) {
+      setCurrentProfile(profile);
+      showToast(`Benvenuto, ${profile.name}`);
+    } else {
+      showToast('PIN errato', 'error');
+    }
+  };
+
+  const handleAddItem = async (itemData) => {
+    try {
+      const newItem = {
+        ...itemData,
+        id: generateId(),
+        profileId: currentProfile.id,
+        status: STATUS.CLEAN,
+        wearCount: 0,
+        lastWornDate: null,
+        dateAdded: new Date().toISOString()
+      };
+      await setDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, 'items', newItem.id), newItem);
+      showToast('Capo aggiunto al guardaroba!');
+    } catch (e) {
+      showToast('Errore aggiunta capo', 'error');
+    }
+  };
+
+  const updateItemStatus = async (itemId, newStatus) => {
+    try {
+      const updates = { status: newStatus };
+      if (newStatus === STATUS.WEARING) {
+        updates.lastWornDate = new Date().toISOString();
+        updates.wearCount = items.find(i => i.id === itemId).wearCount + 1;
+      }
+      await updateDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, 'items', itemId), updates);
+      showToast('Stato aggiornato');
+    } catch (e) {
+      showToast('Errore aggiornamento', 'error');
+    }
+  };
+
+  const deleteItem = async (itemId) => {
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, 'items', itemId));
+      showToast('Capo eliminato');
+    } catch (e) {
+      showToast('Errore eliminazione', 'error');
+    }
+  };
+
+  const logout = () => {
+    setCurrentProfile(null);
+    setActiveTab('dashboard');
+  };
+
+  
+  // Toast Component
+  const Toast = () => {
+    if (!toast) return null;
+    return (
+      <div className={`fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-lg text-white font-medium flex items-center space-x-2 transition-all ${toast.type === 'error' ? 'bg-red-500' : 'bg-green-600'}`}>
+        {toast.type === 'error' ? <AlertCircle size={20} /> : <CheckCircle2 size={20} />}
+        <span>{toast.msg}</span>
+      </div>
+    );
+  };
+
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-[#faf9f6] text-gray-500">Caricamento Maggiordomo...</div>;
+
+  if (!currentProfile) {
+    return (
+      <div className="min-h-screen bg-[#faf9f6] text-[#2c2c2c] flex flex-col items-center justify-center p-6 font-sans">
+        <div className="max-w-md w-full bg-white p-8 rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100">
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-serif font-bold text-[#1a1a1a] mb-2">L'Armadio</h1>
+            <p className="text-sm text-gray-500 uppercase tracking-widest">Il tuo maggiordomo personale</p>
+          </div>
+          
+          <AuthForms profiles={profiles} onLogin={handleLogin} onCreate={handleCreateProfile} />
+        </div>
+        <Toast />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#faf9f6] text-[#2c2c2c] flex font-sans">
+      {/* Mobile Overlay */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 bg-black/20 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed md:sticky top-0 left-0 h-screen w-64 bg-white border-r border-gray-100 shadow-sm z-50 transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+        <div className="flex flex-col h-full">
+          <div className="p-6 flex justify-between items-center border-b border-gray-50">
+            <div>
+              <h2 className="text-2xl font-serif font-bold">L'Armadio</h2>
+              <p className="text-xs text-gray-500">Ciao, {currentProfile.name}</p>
+            </div>
+            <button className="md:hidden" onClick={() => setIsSidebarOpen(false)}><X size={24} /></button>
+          </div>
+          
+          <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+            <NavItem icon={<Home/>} label="Maggiordomo" id="dashboard" activeTab={activeTab} setTab={setActiveTab} />
+            <NavItem icon={<Shirt/>} label="Guardaroba" id="wardrobe" activeTab={activeTab} setTab={setActiveTab} />
+            <NavItem icon={<WashingMachine/>} label="Lavanderia" id="laundry" activeTab={activeTab} setTab={setActiveTab} />
+            <NavItem icon={<Briefcase/>} label="Valigia" id="suitcase" activeTab={activeTab} setTab={setActiveTab} />
+            <NavItem icon={<ShoppingBag/>} label="Acquisti" id="shopping" activeTab={activeTab} setTab={setActiveTab} />
+          </nav>
+          
+          <div className="p-4 border-t border-gray-50">
+            <button onClick={logout} className="flex items-center w-full px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl transition-colors">
+              <LogOut size={20} className="mr-3" /> Esci
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 max-w-7xl mx-auto w-full flex flex-col min-h-screen h-screen overflow-hidden">
+        {/* Header (Mobile) */}
+        <header className="md:hidden flex items-center justify-between p-4 bg-white border-b border-gray-100 shrink-0">
+          <h1 className="font-serif font-bold text-xl">L'Armadio</h1>
+          <button onClick={() => setIsSidebarOpen(true)} className="p-2 bg-gray-50 rounded-lg"><Menu size={24} /></button>
+        </header>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-8">
+          {activeTab === 'dashboard' && <Dashboard items={items} profile={currentProfile} updateStatus={updateItemStatus} />}
+          {activeTab === 'wardrobe' && <Wardrobe items={items} profile={currentProfile} onAdd={handleAddItem} updateStatus={updateItemStatus} onDelete={deleteItem} />}
+          {activeTab === 'laundry' && <Laundry items={items} updateStatus={updateItemStatus} />}
+          {activeTab === 'suitcase' && <Suitcase items={items} />}
+          {activeTab === 'shopping' && <ShoppingAssistant items={items} profile={currentProfile} />}
+        </div>
+      </main>
+      
+      <Toast />
+    </div>
+  );
+}
+
+function AuthForms({ profiles, onLogin, onCreate }) {
+  const [isLogin, setIsLogin] = useState(profiles.length > 0);
+  const [selProfileId, setSelProfileId] = useState('');
+  const [pin, setPin] = useState('');
+  
+  // Registration state
+  const [newName, setNewName] = useState('');
+  const [newGender, setNewGender] = useState('M');
+  const [newPin, setNewPin] = useState('');
+
+  if (isLogin && profiles.length > 0) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm text-gray-600 mb-1">Seleziona Profilo</label>
+          <select 
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none"
+            value={selProfileId} 
+            onChange={(e) => setSelProfileId(e.target.value)}
+          >
+            <option value="">Scegli...</option>
+            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm text-gray-600 mb-1">PIN (4 cifre)</label>
+          <input 
+            type="password" maxLength="4" 
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none"
+            value={pin} onChange={(e) => setPin(e.target.value)}
+          />
+        </div>
+        <button 
+          onClick={() => {
+            const p = profiles.find(x => x.id === selProfileId);
+            if(p) onLogin(p, pin);
+          }}
+          className="w-full py-3 bg-[#1a1a1a] text-white rounded-xl font-medium hover:bg-black transition-colors"
+        >
+          Entra
+        </button>
+        <button onClick={() => setIsLogin(false)} className="w-full text-sm text-gray-500 mt-4 hover:text-black">
+          Crea nuovo profilo
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="block text-sm text-gray-600 mb-1">Nome</label>
+        <input 
+          type="text" 
+          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none"
+          value={newName} onChange={(e) => setNewName(e.target.value)}
+        />
+      </div>
+      <div>
+        <label className="block text-sm text-gray-600 mb-1">Genere</label>
+        <select 
+          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none"
+          value={newGender} onChange={(e) => setNewGender(e.target.value)}
+        >
+          <option value="M">Uomo</option>
+          <option value="F">Donna</option>
+        </select>
+      </div>
+      <div>
+        <label className="block text-sm text-gray-600 mb-1">PIN Segreto (4 cifre)</label>
+        <input 
+          type="password" maxLength="4" 
+          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none"
+          value={newPin} onChange={(e) => setNewPin(e.target.value)}
+        />
+      </div>
+      <button 
+        onClick={() => {
+          if (newName && newPin.length === 4) onCreate(newName, newGender, newPin);
+        }}
+        className="w-full py-3 bg-[#cda434] text-white rounded-xl font-medium hover:bg-[#b58c2c] transition-colors shadow-lg shadow-[#cda434]/20"
+      >
+        Crea Account
+      </button>
+      {profiles.length > 0 && (
+        <button onClick={() => setIsLogin(true)} className="w-full text-sm text-gray-500 mt-4 hover:text-black">
+          Torna al login
+        </button>
+      )}
+    </div>
+  );
+}
+
+function NavItem({ icon, label, id, activeTab, setTab }) {
+  const active = activeTab === id;
+  return (
+    <button
+      onClick={() => setTab(id)}
+      className={`w-full flex items-center px-4 py-3 rounded-xl transition-all duration-200 ${
+        active ? 'bg-[#1a1a1a] text-white shadow-md' : 'text-gray-600 hover:bg-gray-100 hover:text-black'
+      }`}
+    >
+      {React.cloneElement(icon, { size: 20, className: 'mr-3' })}
+      <span className="font-medium">{label}</span>
+    </button>
+  );
+}
+
+function Dashboard({ items, profile, updateStatus }) {
+  const wearingItems = items.filter(i => i.status === STATUS.WEARING);
+  const dirtyItems = items.filter(i => i.status === STATUS.DIRTY);
+  
+  // Butler Logic
+  const getButlerMessage = () => {
+    if (wearingItems.length === 0) return "Buongiorno. Al momento non hai registrato nessun capo addosso. Vai nel guardaroba e seleziona cosa indossi oggi.";
+    
+    // Check if wearing something for too long
+    const wornTooLong = wearingItems.find(i => daysBetween(i.lastWornDate, new Date()) > 2);
+    if (wornTooLong) {
+      return `Ho notato che indossi "${wornTooLong.name}" da più di 2 giorni. Forse è il caso di metterlo a lavare?`;
+    }
+
+    // Chromatic check
+    const colors = wearingItems.map(i => i.color);
+    if (colors.includes('Rosso') && colors.includes('Verde')) {
+      return "Oggi indossi rosso e verde. Un abbinamento audace, molto natalizio!";
+    }
+    
+    return "L'outfit che hai scelto oggi è stato registrato. Sei impeccabile come sempre.";
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="bg-gradient-to-br from-[#1a1a1a] to-[#2c2c2c] text-white p-8 rounded-3xl shadow-xl relative overflow-hidden">
+        <div className="relative z-10">
+          <h2 className="text-3xl font-serif font-bold mb-4">Il tuo Maggiordomo</h2>
+          <p className="text-lg text-gray-300 leading-relaxed max-w-2xl italic">"{getButlerMessage()}"</p>
+        </div>
+        <div className="absolute -right-10 -bottom-10 opacity-10">
+          <User size={200} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Currently Wearing */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h3 className="text-xl font-serif font-bold mb-4 flex items-center">
+            <Shirt className="mr-2 text-[#cda434]" size={20} /> Cosa indossi oggi
+          </h3>
+          {wearingItems.length === 0 ? (
+            <p className="text-gray-500 text-sm">Nessun capo registrato come "indossato".</p>
+          ) : (
+            <div className="space-y-4">
+              {wearingItems.map(item => (
+                <div key={item.id} className="flex items-center space-x-4 bg-gray-50 p-3 rounded-xl border border-gray-100">
+                  <div className="w-16 h-16 rounded-lg bg-gray-200 overflow-hidden flex-shrink-0">
+                    {item.imageUrl ? <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover" /> : <Shirt className="w-full h-full p-4 text-gray-400" />}
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-medium text-sm">{item.name}</p>
+                    <p className="text-xs text-gray-500">Indossato da {daysBetween(item.lastWornDate, new Date())} giorni</p>
+                  </div>
+                  <button 
+                    onClick={() => updateStatus(item.id, STATUS.DIRTY)}
+                    className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors tooltip"
+                    title="Metti nel cesto"
+                  >
+                    <WashingMachine size={18} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Quick Stats */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+           <h3 className="text-xl font-serif font-bold mb-4 flex items-center">
+            <Info className="mr-2 text-blue-500" size={20} /> Riepilogo
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
+            <StatCard label="Capi Totali" value={items.length} />
+            <StatCard label="Nel Cesto" value={dirtyItems.length} color="text-red-500" />
+            <StatCard label="Puliti" value={items.length - dirtyItems.length - wearingItems.length} color="text-green-500" />
+            <StatCard label="Indossati ora" value={wearingItems.length} color="text-[#cda434]" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, color = "text-black" }) {
+  return (
+    <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex flex-col justify-center items-center text-center">
+      <span className={`text-3xl font-bold font-serif ${color}`}>{value}</span>
+      <span className="text-xs text-gray-500 uppercase tracking-wider mt-1">{label}</span>
+    </div>
+  );
+}
+
+function Wardrobe({ items, profile, onAdd, updateStatus, onDelete }) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filterCat, setFilterCat] = useState('');
+
+  const filteredItems = items.filter(item => {
+    const matchSearch = item.name.toLowerCase().includes(search.toLowerCase());
+    const matchCat = filterCat === '' || item.category === filterCat;
+    return matchSearch && matchCat;
+  });
+
+  return (
+    <div className="space-y-6 h-full flex flex-col animate-in fade-in duration-500">
+      {/* Header Actions */}
+      <div className="flex flex-col sm:flex-row gap-4 justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 shrink-0">
+        <div className="relative w-full sm:w-64">
+          <Search className="absolute left-3 top-3 text-gray-400" size={18} />
+          <input 
+            type="text" placeholder="Cerca nel guardaroba..." 
+            className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-[#cda434] outline-none"
+            value={search} onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="flex gap-2 w-full sm:w-auto">
+          <select 
+            className="flex-1 sm:w-auto px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none"
+            value={filterCat} onChange={e => setFilterCat(e.target.value)}
+          >
+            <option value="">Tutte le categorie</option>
+            {CATEGORIES[profile.gender].map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button 
+            onClick={() => setIsAdding(true)}
+            className="flex items-center px-4 py-2.5 bg-[#1a1a1a] text-white rounded-xl text-sm font-medium hover:bg-black transition-colors"
+          >
+            <Plus size={18} className="mr-2" /> Aggiungi
+          </button>
+        </div>
+      </div>
+
+      {/* Item Grid */}
+      <div className="flex-1 overflow-y-auto pb-10">
+        {filteredItems.length === 0 ? (
+          <div className="text-center text-gray-500 mt-20">
+            <Shirt size={48} className="mx-auto text-gray-300 mb-4" />
+            <p>Nessun capo trovato.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+            {filteredItems.map(item => (
+              <ItemCard key={item.id} item={item} updateStatus={updateStatus} onDelete={deleteItem => onDelete(item.id)} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add Modal */}
+      {isAdding && <AddItemModal profile={profile} onClose={() => setIsAdding(false)} onAdd={onAdd} />}
+    </div>
+  );
+}
+
+function ItemCard({ item, updateStatus, onDelete }) {
+  const statusColors = {
+    [STATUS.CLEAN]: 'bg-green-100 text-green-700 border-green-200',
+    [STATUS.WEARING]: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+    [STATUS.DIRTY]: 'bg-red-100 text-red-700 border-red-200',
+  };
+
+  return (
+    <div className="bg-white rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-shadow group relative">
+      <div className="h-48 bg-gray-100 relative">
+        {item.imageUrl ? (
+          <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-gray-300"><Shirt size={48} /></div>
+        )}
+        <div className={`absolute top-2 right-2 px-2 py-1 text-[10px] uppercase font-bold rounded-md border ${statusColors[item.status]}`}>
+          {item.status}
+        </div>
+      </div>
+      
+      <div className="p-4">
+        <h4 className="font-medium text-sm truncate" title={item.name}>{item.name}</h4>
+        <p className="text-xs text-gray-500 mt-1">{item.category} • Tg. {item.size}</p>
+        
+        <div className="mt-4 flex flex-wrap gap-2">
+          {item.status === STATUS.CLEAN && (
+             <button onClick={() => updateStatus(item.id, STATUS.WEARING)} className="flex-1 text-xs py-1.5 bg-black text-white rounded-md hover:bg-gray-800">Indossa</button>
+          )}
+          {item.status === STATUS.WEARING && (
+             <button onClick={() => updateStatus(item.id, STATUS.DIRTY)} className="flex-1 text-xs py-1.5 bg-orange-100 text-orange-700 rounded-md hover:bg-orange-200">A lavare</button>
+          )}
+          {item.status === STATUS.DIRTY && (
+             <button onClick={() => updateStatus(item.id, STATUS.CLEAN)} className="flex-1 text-xs py-1.5 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200">Lavato</button>
+          )}
+          <button onClick={onDelete} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md"><Trash2 size={16} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddItemModal({ profile, onClose, onAdd }) {
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState(CATEGORIES[profile.gender][0]);
+  const [color, setColor] = useState(COLORS[0].name);
+  const [size, setSize] = useState('M');
+  const [season, setSeason] = useState('Tutte');
+  const [image, setImage] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const handleImage = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const base64 = await compressImage(file);
+      setImage(base64);
+    } catch (err) {
+      console.error("Image compression error", err);
+    }
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setIsProcessing(true);
+    onAdd({ name, category, color, size, season, imageUrl: image });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+          <h3 className="font-serif font-bold text-xl">Nuovo Capo</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+          {/* Image Upload */}
+          <div className="flex justify-center">
+            <label className="w-32 h-32 rounded-2xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center cursor-pointer hover:border-[#cda434] hover:bg-yellow-50/30 transition-colors relative overflow-hidden group">
+              {image ? (
+                <>
+                  <img src={image} className="w-full h-full object-cover" alt="Preview" />
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Camera className="text-white" /></div>
+                </>
+              ) : (
+                <>
+                  <Camera className="text-gray-400 mb-2" size={28} />
+                  <span className="text-xs text-gray-500 font-medium">Carica Foto</span>
+                </>
+              )}
+              <input type="file" accept="image/*" className="hidden" onChange={handleImage} />
+            </label>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Nome/Descrizione</label>
+            <input required type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="es. T-Shirt Bianca Cotone" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Categoria</label>
+              <select value={category} onChange={e=>setCategory(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none">
+                {CATEGORIES[profile.gender].map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Taglia</label>
+              <input type="text" value={size} onChange={e=>setSize(e.target.value)} placeholder="es. M, 42" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Colore Base</label>
+              <select value={color} onChange={e=>setColor(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none">
+                {COLORS.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Stagione</label>
+              <select value={season} onChange={e=>setSeason(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none">
+                {SEASONS.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="pt-4">
+             <button disabled={isProcessing} type="submit" className="w-full py-3.5 bg-[#1a1a1a] text-white rounded-xl font-medium hover:bg-black transition-colors disabled:opacity-50">
+               {isProcessing ? 'Salvataggio...' : 'Aggiungi all\'armadio'}
+             </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function Laundry({ items, updateStatus }) {
+  const dirtyItems = items.filter(i => i.status === STATUS.DIRTY);
+
+  // Helper to group laundry
+  const groupedLaundry = useMemo(() => {
+    const groups = { Chiari: [], Scuri: [], Colori: [] };
+    dirtyItems.forEach(item => {
+      const colorInfo = COLORS.find(c => c.name === item.color);
+      if (!colorInfo) { groups.Colori.push(item); return; }
+      if (colorInfo.type === 'light') groups.Chiari.push(item);
+      else if (colorInfo.type === 'dark') groups.Scuri.push(item);
+      else groups.Colori.push(item);
+    });
+    return groups;
+  }, [dirtyItems]);
+
+  const washGroup = (groupName) => {
+    groupedLaundry[groupName].forEach(item => {
+      updateStatus(item.id, STATUS.CLEAN);
+    });
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="bg-blue-50 text-blue-900 p-6 rounded-3xl border border-blue-100 flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-serif font-bold mb-1">Gestione Lavanderia</h2>
+          <p className="text-sm opacity-80">Hai {dirtyItems.length} capi nel cesto della roba sporca.</p>
+        </div>
+        <Droplets size={48} className="text-blue-200" />
+      </div>
+
+      {dirtyItems.length === 0 ? (
+        <div className="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-sm">
+          <WashingMachine size={64} className="mx-auto text-gray-200 mb-4" />
+          <p className="text-gray-500 font-medium">Il cesto è vuoto. Ottimo lavoro!</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <LaundryGroup name="Chiari" icon="🤍" items={groupedLaundry.Chiari} onWash={() => washGroup('Chiari')} />
+          <LaundryGroup name="Scuri" icon="🖤" items={groupedLaundry.Scuri} onWash={() => washGroup('Scuri')} />
+          <LaundryGroup name="Colori" icon="🎨" items={groupedLaundry.Colori} onWash={() => washGroup('Colori')} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LaundryGroup({ name, icon, items, onWash }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex flex-col">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="font-bold text-lg">{icon} Lavatrice {name}</h3>
+        <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-1 rounded-md">{items.length} capi</span>
+      </div>
+      <div className="flex-1 space-y-2 mb-6">
+        {items.map(item => (
+          <div key={item.id} className="text-sm text-gray-600 flex items-center">
+            <div className="w-2 h-2 rounded-full bg-gray-300 mr-2" />
+            <span className="truncate">{item.name}</span>
+          </div>
+        ))}
+      </div>
+      <button 
+        onClick={onWash}
+        className="w-full py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors flex items-center justify-center"
+      >
+        <CheckCircle2 size={16} className="mr-2" /> Segna come Lavati
+      </button>
+    </div>
+  );
+}
+
+function Suitcase({ items }) {
+  const [days, setDays] = useState(3);
+  const [type, setType] = useState('city');
+  const [packingList, setPackingList] = useState(null);
+
+  const generateList = () => {
+    // Basic smart logic for packing
+    const cleanItems = items.filter(i => i.status === STATUS.CLEAN);
+    
+    // Requirements
+    const reqTops = days + 1;
+    const reqBottoms = Math.max(1, Math.ceil(days / 2));
+    const reqUnderwear = days + 2;
+
+    const findItems = (categories, count) => {
+      return cleanItems.filter(i => categories.includes(i.category)).slice(0, count);
+    };
+
+    const tops = findItems(['T-Shirt', 'Camicia', 'Camicetta', 'Maglione'], reqTops);
+    const bottoms = findItems(['Pantaloni', 'Jeans', 'Pantaloncini', 'Gonna'], reqBottoms);
+    const underwear = findItems(['Intimo', 'Calzini'], reqUnderwear);
+    const shoes = findItems(['Scarpe Sportive', 'Scarpe Eleganti', 'Tacchi', 'Stivali'], 2);
+
+    setPackingList({
+      tops: { req: reqTops, found: tops },
+      bottoms: { req: reqBottoms, found: bottoms },
+      underwear: { req: reqUnderwear, found: underwear },
+      shoes: { req: 2, found: shoes }
+    });
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="bg-[#2c2c2c] text-white p-6 md:p-8 rounded-3xl shadow-lg relative overflow-hidden">
+        <div className="relative z-10">
+          <h2 className="text-2xl font-serif font-bold mb-2">Prepara la Valigia</h2>
+          <p className="text-sm text-gray-300 mb-6">Dimmi dove vai e per quanto tempo, ti preparerò lo zaino usando i capi puliti a disposizione.</p>
+          
+          <div className="flex flex-col md:flex-row gap-4 items-end">
+            <div className="w-full md:w-auto">
+              <label className="block text-xs uppercase tracking-wider mb-1 text-gray-400">Giorni</label>
+              <input type="number" min="1" max="14" value={days} onChange={e=>setDays(parseInt(e.target.value)||1)} className="w-full md:w-24 p-3 bg-white/10 border border-white/20 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none text-white" />
+            </div>
+            <div className="w-full md:w-auto flex-1">
+              <label className="block text-xs uppercase tracking-wider mb-1 text-gray-400">Tipo Viaggio</label>
+              <select value={type} onChange={e=>setType(e.target.value)} className="w-full p-3 bg-white/10 border border-white/20 rounded-xl focus:ring-2 focus:ring-[#cda434] outline-none text-white [&>option]:text-black">
+                <option value="city">Città / Weekend</option>
+                <option value="beach">Mare / Relax</option>
+                <option value="business">Lavoro / Business</option>
+              </select>
+            </div>
+            <button onClick={generateList} className="w-full md:w-auto px-6 py-3 bg-[#cda434] text-white rounded-xl font-medium hover:bg-[#b58c2c] transition-colors">
+              Genera
+            </button>
+          </div>
+        </div>
+        <Briefcase className="absolute -right-4 -bottom-4 opacity-10" size={150} />
+      </div>
+
+      {packingList && (
+        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-6">
+          <h3 className="text-xl font-serif font-bold text-center border-b border-gray-100 pb-4">La tua lista perfetta</h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <PackingSection title="Parti Superiori" target={packingList.tops.req} items={packingList.tops.found} icon="👕" />
+            <PackingSection title="Pantaloni/Gonne" target={packingList.bottoms.req} items={packingList.bottoms.found} icon="👖" />
+            <PackingSection title="Intimo & Calze" target={packingList.underwear.req} items={packingList.underwear.found} icon="🧦" />
+            <PackingSection title="Scarpe" target={packingList.shoes.req} items={packingList.shoes.found} icon="👟" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PackingSection({ title, target, items, icon }) {
+  const missing = target - items.length;
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-3">
+        <h4 className="font-bold text-gray-800">{icon} {title} <span className="text-gray-400 font-normal text-sm">(Consigliati: {target})</span></h4>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm text-red-500 bg-red-50 p-2 rounded-lg border border-red-100">Nessun capo pulito disponibile!</p>
+      ) : (
+        <ul className="space-y-2">
+          {items.map(item => (
+            <li key={item.id} className="flex items-center text-sm bg-gray-50 p-2 rounded-lg border border-gray-100">
+               <div className="w-8 h-8 rounded bg-gray-200 mr-3 overflow-hidden flex-shrink-0">
+                 {item.imageUrl ? <img src={item.imageUrl} alt="" className="w-full h-full object-cover"/> : null}
+               </div>
+               <span className="truncate flex-1">{item.name}</span>
+               <CheckCircle2 size={16} className="text-green-500 ml-2 shrink-0" />
+            </li>
+          ))}
+          {missing > 0 && (
+             <li className="text-sm text-orange-500 bg-orange-50 p-2 rounded-lg border border-orange-100 border-dashed">
+               Mancano {missing} capi! Ti consiglio di fare una lavatrice.
+             </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ShoppingAssistant({ items, profile }) {
+  // AI-like Analysis logic
+  const analysis = useMemo(() => {
+    const suggestions = [];
+    const cats = items.reduce((acc, item) => {
+      acc[item.category] = (acc[item.category] || 0) + 1;
+      return acc;
+    }, {});
+    
+    const colors = items.reduce((acc, item) => {
+      acc[item.color] = (acc[item.color] || 0) + 1;
+      return acc;
+    }, {});
+
+    // Logic rules
+    const topCount = (cats['T-Shirt']||0) + (cats['Camicia']||0) + (cats['Camicetta']||0);
+    const bottomCount = (cats['Pantaloni']||0) + (cats['Jeans']||0) + (cats['Gonna']||0);
+    
+    if (topCount > 0 && bottomCount > 0 && topCount / bottomCount > 4) {
+      suggestions.push({
+        title: "Sbilanciamento Guardaroba",
+        desc: "Hai moltissime maglie rispetto ai pantaloni. Il prossimo acquisto dovrebbe essere un pantalone base (es. Jeans o Nero).",
+        type: "warning"
+      });
+    }
+
+    if (!colors['Nero'] && !colors['Bianco']) {
+      suggestions.push({
+        title: "Mancano i Colori Base",
+        desc: "Non hai capi bianchi o neri. Sono essenziali per creare abbinamenti facili. Considera l'acquisto di una T-shirt bianca di buona qualità.",
+        type: "tip"
+      });
+    }
+
+    if (colors['Nero'] > (items.length * 0.5)) {
+      suggestions.push({
+        title: "Esplora Nuovi Colori",
+        desc: "Più della metà del tuo armadio è nera! Prova a inserire toni neutri come il Beige o il Grigio chiaro per dare luce ai tuoi outfit.",
+        type: "style"
+      });
+    }
+
+    if (items.length > 0 && suggestions.length === 0) {
+      suggestions.push({
+        title: "Guardaroba Equilibrato",
+        desc: "Il tuo armadio è perfettamente bilanciato in questo momento. Compra solo se trovi un capo che ami davvero!",
+        type: "success"
+      });
+    }
+
+    return suggestions;
+  }, [items]);
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="bg-gradient-to-r from-purple-900 to-[#1a1a1a] text-white p-8 rounded-3xl shadow-lg">
+        <h2 className="text-2xl font-serif font-bold mb-2 flex items-center">
+          <ShoppingBag className="mr-3 text-purple-300" /> Il tuo Personal Shopper
+        </h2>
+        <p className="text-gray-300 text-sm max-w-xl">
+          Analizzo le statistiche del tuo armadio per suggerirti cosa comprare (e cosa evitare) per avere un guardaroba intelligente e funzionale.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {analysis.length === 0 && items.length === 0 ? (
+           <div className="col-span-2 text-center py-10 bg-white rounded-2xl border border-gray-100">
+             <p className="text-gray-500">Aggiungi dei capi all'armadio per ricevere consigli personalizzati.</p>
+           </div>
+        ) : (
+          analysis.map((sug, idx) => (
+            <div key={idx} className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm relative overflow-hidden group">
+              <div className={`absolute top-0 left-0 w-1 h-full ${
+                sug.type === 'warning' ? 'bg-orange-400' : 
+                sug.type === 'tip' ? 'bg-blue-400' : 
+                sug.type === 'style' ? 'bg-purple-400' : 'bg-green-400'
+              }`} />
+              <h3 className="font-bold text-lg mb-2 pl-3">{sug.title}</h3>
+              <p className="text-gray-600 text-sm pl-3 leading-relaxed">{sug.desc}</p>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
