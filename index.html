@@ -291,25 +291,15 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // IMPORTANTE PER GITHUB: Seleziona le tue credenziali Firebase
-        // Sostituisci questo blocco con le credenziali del tuo progetto Firebase se ospiti questo file esternamente.
-        let firebaseConfig = {};
-        if (typeof __firebase_config !== 'undefined') {
-            firebaseConfig = JSON.parse(__firebase_config);
-        } else {
-            // METTI QUI I TUOI DATI FIREBASE PER FARLO FUNZIONARE SU GITHUB PAGES
-            console.warn("Manca la configurazione Firebase! Modifica il codice per inserire le tue credenziali.");
-            /* ESEMPIO:
-            firebaseConfig = {
-                apiKey: "LA_TUA_API_KEY",
-                authDomain: "iltuoprogetto.firebaseapp.com",
-                projectId: "iltuoprogetto",
-                storageBucket: "iltuoprogetto.appspot.com",
-                messagingSenderId: "12345",
-                appId: "1:1234:web:abcd"
-            };
-            */
-        }
+        // Configurazione Firebase per armadio-digitale
+        let firebaseConfig = {
+            apiKey: "AIzaSyA9XXTnIsY-VBnPuhjgkXv7wgTwILWMdgA",
+            authDomain: "armadio-digitale-d0748.firebaseapp.com",
+            projectId: "armadio-digitale-d0748",
+            storageBucket: "armadio-digitale-d0748.firebasestorage.app",
+            messagingSenderId: "865126510158",
+            appId: "1:865126510158:web:13b2ddaf8bea3678b35d1f"
+        };
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'armadio-github-app';
 
         let app, db, auth;
